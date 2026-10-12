@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Week 05 · 单摆物理仿真 | 龙勤涛 7904126014</title>
+<title>Week 05 · 双摆混沌仿真 | 龙勤涛 7904126014</title>
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a24; }
   canvas { display: block; }
@@ -28,7 +28,7 @@
   #panel .val { min-width: 52px; color: #e0f2ff; text-shadow: 0 0 6px rgba(143,211,255,.5); }
   #panel input[type="range"] {
     -webkit-appearance: none; appearance: none;
-    width: 150px; height: 4px; border-radius: 2px;
+    width: 130px; height: 4px; border-radius: 2px;
     background: #3a4a6a; outline: none; cursor: pointer;
   }
   #panel input[type="range"]::-webkit-slider-thumb {
@@ -53,25 +53,29 @@
 <body>
 <canvas id="stage"></canvas>
 <div id="panel">
-  <label>摆长 L
-    <input type="range" id="sliderL" min="100" max="350" step="1" value="200">
-    <span class="val" id="valL">200 px</span>
+  <label>上摆 L1
+    <input type="range" id="sliderL1" min="100" max="250" step="1" value="180">
+    <span class="val" id="valL1">180 px</span>
+  </label>
+  <label>下摆 L2
+    <input type="range" id="sliderL2" min="100" max="250" step="1" value="160">
+    <span class="val" id="valL2">160 px</span>
   </label>
   <label>重力 g
     <input type="range" id="sliderG" min="1" max="25" step="0.1" value="9.8">
     <span class="val" id="valG">9.8</span>
   </label>
   <label>阻尼 k
-    <input type="range" id="sliderK" min="0" max="0.010" step="0.0005" value="0.005">
-    <span class="val" id="valK">0.0050</span>
+    <input type="range" id="sliderK" min="0" max="0.010" step="0.0005" value="0.0005">
+    <span class="val" id="valK">0.0005</span>
   </label>
   <button id="resetBtn" type="button">重置摆动</button>
 </div>
 <div id="hud">
-  <div><b>单摆仿真</b> · θ = -（g/L）·sin θ - k·ω</div>
-  <div>摆角 θ: <span id="readTheta"></span> rad</div>
-  <div>角速度 ω: <span id="readOmega"></span> rad/s</div>
-  <div>周期 T≈2π√(L/g): <span id="readPeriod"></span> s</div>
+  <div><b>双摆混沌仿真</b> · RK4 积分 · 拖拽摆球实验</div>
+  <div>θ1: <span id="readT1"></span> rad | ω1: <span id="readW1"></span> rad/s</div>
+  <div>θ2: <span id="readT2"></span> rad | ω2: <span id="readW2"></span> rad/s</div>
+  <div>系统总能量 E: <span id="readE"></span> J（发散检测）</div>
 </div>
 <script>
 'use strict';
@@ -81,13 +85,17 @@ const ctx = canvas.getContext('2d');
 
 const PX_PER_M = 100;
 const params = {
-  L: 200,
+  L1: 180,
+  L2: 160,
   g: 9.8,
-  theta0: 45 * Math.PI / 180,
-  k: 0.005,
+  k: 0.0005,
+  m1: 1.0,
+  m2: 1.0,
+  theta0: Math.PI / 2,
 };
 
-const state = { theta: params.theta0, omega: 0 };
+// state: [theta1, omega1, theta2, omega2]
+const s = [params.theta0, 0, params.theta0, 0];
 
 let W = 0, H = 0, pivotX = 0, pivotY = 0;
 function resize() {
@@ -100,26 +108,101 @@ function resize() {
   canvas.style.height = H + 'px';
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   pivotX = W / 2;
-  pivotY = H * 0.22;
+  pivotY = H * 0.28;
 }
 window.addEventListener('resize', resize);
 resize();
 
+function derivatives(st) {
+  const [t1, w1, t2, w2] = st;
+  const { g, k, m1, m2 } = params;
+  const L1 = params.L1 / PX_PER_M;
+  const L2 = params.L2 / PX_PER_M;
+  const d = t1 - t2;
+  const den = 2 * m1 + m2 - m2 * Math.cos(2 * d);
+
+  const a1 = (-g * (2 * m1 + m2) * Math.sin(t1)
+              - m2 * g * Math.sin(t1 - 2 * t2)
+              - 2 * Math.sin(d) * m2 * (w2 * w2 * L2 + w1 * w1 * L1 * Math.cos(d)))
+             / (L1 * den) - k * w1;
+
+  const a2 = (2 * Math.sin(d) * (w1 * w1 * L1 * (m1 + m2)
+              + g * (m1 + m2) * Math.cos(t1)
+              + w2 * w2 * L2 * m2 * Math.cos(d)))
+             / (L2 * den) - k * w2;
+
+  return [w1, a1, w2, a2];
+}
+
+function rk4Step(st, h) {
+  const k1 = derivatives(st);
+  const s2 = st.map((v, i) => v + k1[i] * h / 2);
+  const k2 = derivatives(s2);
+  const s3 = st.map((v, i) => v + k2[i] * h / 2);
+  const k3 = derivatives(s3);
+  const s4 = st.map((v, i) => v + k3[i] * h);
+  const k4 = derivatives(s4);
+  return st.map((v, i) => v + (h / 6) * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]));
+}
+
+function totalEnergy() {
+  const [t1, w1, t2, w2] = s;
+  const L1 = params.L1 / PX_PER_M, L2 = params.L2 / PX_PER_M;
+  const { m1, m2, g } = params;
+  const v1sq = L1 * L1 * w1 * w1;
+  const v2sq = v1sq + L2 * L2 * w2 * w2 + 2 * L1 * L2 * w1 * w2 * Math.cos(t1 - t2);
+  const y1 = -L1 * Math.cos(t1);
+  const y2 = y1 - L2 * Math.cos(t2);
+  return 0.5 * m1 * v1sq + 0.5 * m2 * v2sq + m1 * g * y1 + m2 * g * y2;
+}
+
 const SUBSTEP = 1 / 240;
+let dragging = 0;
 function stepPhysics(dt) {
+  if (dragging) return;
   let remaining = Math.min(dt, 0.05);
-  const Lm = params.L / PX_PER_M;
   while (remaining > 0) {
     const h = Math.min(SUBSTEP, remaining);
-    const alpha = -(params.g / Lm) * Math.sin(state.theta) - params.k * state.omega;
-    state.omega += alpha * h;
-    state.theta += state.omega * h;
+    const next = rk4Step(s, h);
+    for (let i = 0; i < 4; i++) s[i] = next[i];
     remaining -= h;
   }
 }
 
+function bobPositions() {
+  const x1 = pivotX + params.L1 * Math.sin(s[0]);
+  const y1 = pivotY + params.L1 * Math.cos(s[0]);
+  const x2 = x1 + params.L2 * Math.sin(s[2]);
+  const y2 = y1 + params.L2 * Math.cos(s[2]);
+  return { x1, y1, x2, y2 };
+}
+
 const trail = [];
-const TRAIL_MAX = 90;
+const TRAIL_MAX = 600;
+let hue = 0;
+
+function pushTrail(x, y) {
+  hue = (hue + 1.2) % 360;
+  trail.push({ x, y, hue });
+  if (trail.length > TRAIL_MAX) trail.shift();
+}
+
+function drawTrail() {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineCap = 'round';
+  for (let i = 1; i < trail.length; i++) {
+    const a = i / trail.length;
+    const p = trail[i];
+    ctx.strokeStyle = 'hsla(' + p.hue + ', 95%, 60%, ' + (a * a * 0.55).toFixed(3) + ')';
+    ctx.lineWidth = 0.5 + 3.5 * a;
+    ctx.beginPath();
+    ctx.moveTo(trail[i - 1].x, trail[i - 1].y);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
 
 function draw() {
   ctx.fillStyle = '#1a1a24';
@@ -134,26 +217,16 @@ function draw() {
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
   }
 
-  const bx = pivotX + params.L * Math.sin(state.theta);
-  const by = pivotY + params.L * Math.cos(state.theta);
+  const { x1, y1, x2, y2 } = bobPositions();
+  if (!dragging) pushTrail(x2, y2);
+  drawTrail();
 
-  trail.push({ x: bx, y: by });
-  if (trail.length > TRAIL_MAX) trail.shift();
-  for (let i = 1; i < trail.length; i++) {
-    const a = i / trail.length;
-    ctx.strokeStyle = 'rgba(120, 200, 255, ' + (a * 0.25).toFixed(3) + ')';
-    ctx.lineWidth = 2 * a;
-    ctx.beginPath();
-    ctx.moveTo(trail[i - 1].x, trail[i - 1].y);
-    ctx.lineTo(trail[i].x, trail[i].y);
-    ctx.stroke();
-  }
-
-  ctx.strokeStyle = '#3a4a6a';
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#4a5a7a';
+  ctx.lineWidth = 2.5;
   ctx.beginPath();
   ctx.moveTo(pivotX, pivotY);
-  ctx.lineTo(bx, by);
+  ctx.lineTo(x1, y1);
+  ctx.lineTo(x2, y2);
   ctx.stroke();
 
   ctx.fillStyle = '#6a7a9a';
@@ -165,48 +238,55 @@ function draw() {
   ctx.arc(pivotX, pivotY, 3, 0, Math.PI * 2);
   ctx.fill();
 
-  const R = 18;
+  drawBob(x1, y1, 15, '#7cc8ff', '#2b6cb0');
+  drawBob(x2, y2, 15, 'hsl(' + hue + ', 95%, 65%)', '#2b6cb0');
+
+  readT1.textContent = s[0].toFixed(3);
+  readW1.textContent = s[1].toFixed(2);
+  readT2.textContent = s[2].toFixed(3);
+  readW2.textContent = s[3].toFixed(2);
+  readE.textContent = totalEnergy().toFixed(3);
+}
+
+function drawBob(x, y, r, inner, outer) {
   ctx.save();
   ctx.shadowColor = 'rgba(120, 210, 255, 0.9)';
-  ctx.shadowBlur = 32;
-  const grad = ctx.createRadialGradient(bx - 5, by - 6, 2, bx, by, R);
+  ctx.shadowBlur = 30;
+  const grad = ctx.createRadialGradient(x - 4, y - 5, 2, x, y, r);
   grad.addColorStop(0, '#eaf7ff');
-  grad.addColorStop(0.45, '#7cc8ff');
-  grad.addColorStop(1, '#2b6cb0');
+  grad.addColorStop(0.45, inner);
+  grad.addColorStop(1, outer);
   ctx.fillStyle = grad;
   ctx.beginPath();
-  ctx.arc(bx, by, R, 0, Math.PI * 2);
+  ctx.arc(x, y, r, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
-
-  readTheta.textContent = state.theta.toFixed(3);
-  readOmega.textContent = state.omega.toFixed(3);
 }
 
-const readTheta = document.getElementById('readTheta');
-const readOmega = document.getElementById('readOmega');
-const readPeriod = document.getElementById('readPeriod');
+const readT1 = document.getElementById('readT1');
+const readW1 = document.getElementById('readW1');
+const readT2 = document.getElementById('readT2');
+const readW2 = document.getElementById('readW2');
+const readE = document.getElementById('readE');
 
-function updatePeriod() {
-  readPeriod.textContent =
-    (2 * Math.PI * Math.sqrt((params.L / PX_PER_M) / params.g)).toFixed(2);
-}
-updatePeriod();
-
-const sliderL = document.getElementById('sliderL');
+const sliderL1 = document.getElementById('sliderL1');
+const sliderL2 = document.getElementById('sliderL2');
 const sliderG = document.getElementById('sliderG');
 const sliderK = document.getElementById('sliderK');
 
-sliderL.addEventListener('input', () => {
-  params.L = Number(sliderL.value);
-  document.getElementById('valL').textContent = params.L + ' px';
+sliderL1.addEventListener('input', () => {
+  params.L1 = Number(sliderL1.value);
+  document.getElementById('valL1').textContent = params.L1 + ' px';
   trail.length = 0;
-  updatePeriod();
+});
+sliderL2.addEventListener('input', () => {
+  params.L2 = Number(sliderL2.value);
+  document.getElementById('valL2').textContent = params.L2 + ' px';
+  trail.length = 0;
 });
 sliderG.addEventListener('input', () => {
   params.g = Number(sliderG.value);
   document.getElementById('valG').textContent = params.g.toFixed(1);
-  updatePeriod();
 });
 sliderK.addEventListener('input', () => {
   params.k = Number(sliderK.value);
@@ -214,9 +294,38 @@ sliderK.addEventListener('input', () => {
 });
 
 document.getElementById('resetBtn').addEventListener('click', () => {
-  state.theta = params.theta0;
-  state.omega = 0;
+  s[0] = s[2] = params.theta0;
+  s[1] = s[3] = 0;
   trail.length = 0;
+});
+
+canvas.addEventListener('mousedown', (e) => {
+  const { x1, y1, x2, y2 } = bobPositions();
+  const mx = e.clientX, my = e.clientY;
+  const hit = 24;
+  if ((mx - x2) ** 2 + (my - y2) ** 2 < hit * hit) dragging = 2;
+  else if ((mx - x1) ** 2 + (my - y1) ** 2 < hit * hit) dragging = 1;
+  if (dragging) { s[1] = 0; s[3] = 0; trail.length = 0; }
+});
+window.addEventListener('mousemove', (e) => {
+  const { x1, y1, x2, y2 } = bobPositions();
+  const mx = e.clientX, my = e.clientY;
+  if (!dragging) {
+    const over = (mx - x2) ** 2 + (my - y2) ** 2 < 576
+              || (mx - x1) ** 2 + (my - y1) ** 2 < 576;
+    canvas.style.cursor = over ? 'grab' : 'default';
+    return;
+  }
+  canvas.style.cursor = 'grabbing';
+  if (dragging === 1) {
+    s[0] = Math.atan2(mx - pivotX, my - pivotY);
+  } else {
+    s[2] = Math.atan2(mx - x1, my - y1);
+  }
+  s[1] = 0; s[3] = 0;
+});
+window.addEventListener('mouseup', () => {
+  if (dragging) { dragging = 0; trail.length = 0; }
 });
 
 let last = performance.now();
